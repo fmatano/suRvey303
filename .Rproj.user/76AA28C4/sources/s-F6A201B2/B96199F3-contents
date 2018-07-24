@@ -1,0 +1,640 @@
+---
+title: 'Intro to the survey R package (36-303)'
+author: "By Jared S. Murray"
+output: 
+  html_document:
+    toc: true
+---
+
+# Preliminaries
+
+The purpose of this document is to give you a brief introduction and an overview of R's survey package. It assumes that you have R and some basic experience using it. All the files you need to run these  examples are posted on cavanvas (example_datasets.zip). Note that these population counts used to post-stratify are out of date; for accurate population counts use the CMU Factbook.
+
+This tutorial assumes that you know how to read data into R. For most of you your data will wind up in a .CSV ("comma separated value") file. Some tips for getting a CSV file into R are given  [here](https://flowingdata.com/2015/02/18/loading-data-and-basic-formatting-in-r/).
+
+Here are a few more tips, with some overlap:
+
+- When calling `read.csv`, you should usually use the option `stringsAsFactors=FALSE`. By default `read.csv` will treat all text as categorical variables (called "factors" in R), which verges on insane.
+- For data that looks numeric but isn't (e.g., id variables with leading zeros), use the `colClasses` argument
+- For data that is numeric but doesn't look it, sometimes the function `as.numeric` helps. But there's a limit to what it can fix, and sometimes you'll end up editing this data by hand in the CSV file. 
+- Inspect your data carefully. Use `head` and `tail` to look at the beginning and end of the dataset. How are missing values recorded? Most of your datasets are small enough that you'll be able to inspect the CSV file by eye, but you should look at summaries, tables and plots after you read in the data (boxplots, histograms, scatterplots,...). 
+- For categorical variables it's often a good idea to create factors after loading the data (assuming you used `stringsAsFactors=FALSE`). This is especially true if you plan on fitting regression models, since R will automatically dummy-code factors. See Example 1 for how to create factors.
+
+You can get help with R from Prof. Murray or the TA's, either by request or during office hours.
+
+Finally, the webpage for the survey package is [here](http://r-survey.r-forge.r-project.org/survey/index.html). There are a number of useful if somewhat terse examples, and some tutorials (linked toward the bottom of the page) that have much more detail than presented here (e.g. the JSM 2012 continuing education slides).
+
+```{r, echo=FALSE, results='hide', eval=FALSE}
+set.seed(1)
+
+setwd('~/Dropbox/36-303-2018/samples')
+frame = read.csv('frame_2017.csv')
+frame$college = 
+```
+
+```{r, echo=FALSE, results='hide', eval=FALSE}
+set.seed(1)
+
+setwd('~/Dropbox/36-303-2018/samples')
+frame = read.csv('list.csv')
+
+Nc = 360
+clus.weights = cbind(ifelse(frame$class<2, 1, 4),
+                     ifelse(frame$class<2, 3, 1),
+                     ifelse(frame$class<3, 1, 5))
+
+clus.pr = t(t(clus.weights)/rowSums(clus.weights))
+clus.assign = apply(clus.pr, 1, function(x) sample(1:Nc, 1, prob=rep(x, Nc/3)))
+table(clus.assign, frame$class)
+
+frame$cluster = clus.assign
+
+#"between"
+rho = 1
+#"within"
+sigma = 2
+
+icc.model = rho^2/(rho^2+sigma^2)
+
+re = rnorm(Nc, 0, rho)
+
+y = re[frame$cluster] - as.numeric(frame$college == "CFA") + 3*(frame$class>2) + rnorm(nrow(frame), 0, sigma)
+
+y[frame$class==1] = 0
+
+y = as.numeric(y>0.5)#floor(y) - min(floor(y)-1)
+
+female = as.numeric(runif(nrow(frame))<0.4)
+
+frame$female = female
+frame$Q2 = y 
+
+gpa = 2.25 + (4-2.25)*rbeta(nrow(frame), 4, 2)
+
+salary.mean = c(60000, 40000, 80000, 60000, 50000, 60000, 70000, 110000, 60000) - 20000
+salary.sd   = c(5000,   2000, 20000,  6000,  3000,  7000,  7000,  20000,  2000)
+
+salary = salary.mean[as.numeric(frame$college)] + 12500*(gpa^1.2) + 0.7*salary.sd[as.numeric(frame$college)]*rnorm(nrow(frame))
+
+frame$gpa = round(gpa, 2)
+frame$salary = round(salary, 2)
+
+frame = frame[frame$class<10,]
+frame$college = droplevels(frame$college)
+
+# Example 1: SRS
+
+rate.lo = 0.1
+rate = 0.4
+
+srs = sample(nrow(frame), 500)
+
+dat.srs = frame[srs,-c(1,4)]
+resp.prob = ifelse(dat.srs$college %in% c("SCS", "CIT"), rate.lo, rate)
+resp = (runif(nrow(dat.srs))<resp.prob)
+
+dat.srs.resp = dat.srs[resp,]
+
+strat.counts = with(frame, as.data.frame(table(college, class)))
+
+#aa = anova(aov(y~factor(frame$cluster)))
+#icc = 1-(aa[[2]][2]/sum(aa[[2]]))
+
+#tt = aggregate(y, by=list(cid), sum)[,2]
+#S2t = sum((tt - mean(tt))^2)/(N-1)
+
+#sa = sample(N, n)
+#sumy.samp = tt[sa]
+
+
+nclus = 15
+cluster = sample(Nc, nclus)
+dat.clus = frame[frame$cluster %in% cluster,-1]
+
+
+## strat
+n.total = 200
+
+# Compute stratum counts
+N = table(frame$class)
+# Proportions
+p = N/sum(N)
+# Number to sample in each stratum. "ceiling" rounds up
+n = ceiling(n.total*p)
+
+# Split the dataframe by the strata
+split.frame = split(frame, frame$class)
+
+# split.frame is a list of R data.frames, where each is a stratum-specific frame
+# this line returns stratum-specific samples, also in a list
+H = length(split.frame) # Number of strata
+split.samp = lapply(1:H, function(h) split.frame[[h]][sample(N[h], n[h]),])
+
+# use do.call to stack each stratum-specific sample:
+dat.strat = do.call(rbind, split.samp)[,-c(1,4)]
+
+#write.csv(dat.strat, file="strat.csv", row.names=FALSE)
+
+write.csv(dat.srs.resp, file='~/Dropbox/teaching/36-303/lab/srs.csv', row.names=FALSE)
+write.csv(dat.strat, file='~/Dropbox/teaching/36-303/lab/strat.csv', row.names=FALSE)
+write.csv(dat.clus, file='~/Dropbox/teaching/36-303/lab/clus.csv', row.names=FALSE)
+```
+
+## Installing the survey package
+
+From the R console, call `install.packages('survey')` to install the package. Then load it by calling
+
+```{r}
+library(survey)
+```
+
+## Example datasets
+
+In the sections below 3 example designs are covered: A simple random sample, a stratified random sample, and a one-stage cluster random sample with unequal sized clusters. Examples 2 and 3 are designed mainly to show you how to correctly create `survey.design` objects for cluster and stratified designs. Once you have made those objects you can use the same functions for plots and analysis that are used in Example 1; the details are abstracted away by the survey package. 
+
+The data for these examples are synthetic (made up), inspired by a previous 303 project. The target population is CMU Pittsburgh undergrads. There are 6 or 7 variables:
+
+- `college`: The student's primary college, with 7 levels:
+    - BXA (Intercollege degree programs)
+    - CFA
+    - CIT
+    - DC
+    - MCS
+    - SCS
+    - TSB
+- `class`: Class year, coded 1-4 (First year - 4th year Senior) or 5 (which is actually 5+ years)
+- `female`: 1 if student is female, 0 otherwise
+- `Q2`: Question 2, a yes (1) or no (0) question, whether the student has ever had a summer internship
+- `gpa`: The student's reported GPA
+- `salary`: The student's expected salary after graduation
+- `cluster`: The cluster that the student belongs to (only in the cluster sampling example) 
+
+
+# Example 1: SRS
+
+Use the `set.wd` function to set the current working directory to the where your data live (change the code below to reflect the directory where you have the data), and read it in with `read.csv`.
+
+```{r}
+setwd('~/Dropbox/36-303-2018/_survey_pack_intro/example_datasets')
+dat = read.csv('srs.csv', stringsAsFactors=FALSE)
+```
+
+Start by looking at the first few rows, checking the size of the dataset, format of the columns, etc
+```{r}
+head(dat)
+dim(dat)
+str(dat)
+summary(dat)
+```
+
+The `college`, `class`, `female` and `Q2` variables should all be factors. Let's fix that now:
+```{r}
+dat$college = factor(dat$college)
+dat$class   = factor(dat$class)
+dat$female  = factor(dat$female, levels = c(0,1), labels = c("No", "Yes") )
+dat$Q2      = factor(dat$Q2, levels = c(0,1), labels = c("No", "Yes"))
+```
+
+Note that we gave `female` and `Q2` informative labels. Let's also give `Q2` a more informative name. Since `Q2` is in the 4th column of the data frame, we can rename it like so:
+
+```{r}
+colnames(dat)[4] = "internship"
+```
+
+Let's check that everything went OK:
+
+```{r}
+head(dat)
+str(dat)
+summary(dat)
+```
+
+
+
+### Creating the `survey.design` object
+
+The survey package provides a `survey.design` object, which is a container for a dataset and the sampling design information, including sampling scheme, weights, population sizes (and more). 
+
+The `svydesign` function is used to create `survey.design` objects. It has a number of arguments, but the most important for you are:
+
+- `ids`: Name of variable in the dataframe that contains cluster ids
+- `strata`: Names of stratification variables, as a formula: `~var1 + var2 + var3`
+- `fpc`: A vector the same length as the data, giving the stratum population size for each *observation*. The name is confusing, since you don't actually supply the finite population correction factor.
+- `data`: Dataframe containing the raw survey data
+
+For the first example we have an SRS. In this case there were $N=5524$ CMU Pittsburgh undergraduates as of March.
+
+```{r}
+N = 5524
+n = nrow(dat)
+des = svydesign(ids = ~1, 
+                    strata = NULL, 
+                    fpc = rep(N, n),
+                    data = dat
+                    )
+```
+
+The arguments are interpreted as the following:
+
+- `ids = ~1` means there is no clustering.
+- `strata = NULL` means there was no stratification.
+- `fpc = rep(N, n)`: The function call `rep(N, n)` generates a vector of length `n` where each entry is `N` (the population size).
+- `data = dat` tells `svydesign` where to find the actual data. 
+    
+Let's see what the results look like:
+
+```{r}
+summary(des)
+```
+
+"Independent sampling design" means that the sampling design is an SRS. When the population size is specified (via the `fpc` argument) it is assumed that the SRS is without replacement.
+
+### Estimates with the survey package
+
+Once we've created the `survey.design` object `des` we can start computing things! the survey package provides a number of `svy*` functions that are similar to built in R functions, but account for survey design features. 
+
+To calculate a mean, with the correct SE (including the fpc):
+```{r}
+svymean(~salary, design = des)
+```
+
+Like most of the functions in the survey package, `svymean` relies on R formulas to select variables. These are similar to the formulas you're familiar with from `lm` for example, but are often one-sided (as above). This looks awkward but can actually be convenient, since you can do things like transform variables on the fly:
+
+```{r}
+svymean(~log10(salary), design = des)
+```
+
+Totals and proportions are computed similarly:
+```{r}
+svytotal(~internship, des)
+svymean(~internship, des)
+```
+
+To calculate subgroup statistics with the correct SE's, you can use `svyby`:
+
+```{r}
+svyby(~salary, by=~college, design=des, FUN = svymean)
+```
+
+These standard errors are corrected to account for the random denominators (subgroup sizes). If you're only interested in particular subgroups, you can use the `subset` function too:
+
+```{r}
+svymean(~salary,  design=subset(des, college=="CIT"))
+```
+
+You can compute confidence intervals by hand, using the formulas based on the CLT, or using the `confint` function:
+```{r}
+confint(svymean(~salary, des))
+```
+
+#### Linear Regression
+
+For fitting regression models, use `svyglm`. The interface is very similar to the core `lm` or `glm` functions:
+
+```{r}
+linear.reg = svyglm(salary ~ gpa + female + class, design = des)
+summary(linear.reg)
+```
+
+Standard diagnostics are available to you as well, for example:
+
+```{r}
+plot(linear.reg)
+```
+
+Do you see any problems there?
+
+#### Logistic Regression
+
+For logistic regression we have to transform the response into a numeric variable taking values 0 or 1, and specify `family=quasibinomial()` (this is essentially the same as using `family=binomial` in `glm` but avoids pesky warnings):
+
+```{r}
+logistic.reg = svyglm(as.numeric(internship=="Yes") ~ female + college, design = des, family=quasibinomial())
+summary(logistic.reg)
+```
+
+## Poststratification 
+
+```{r, echo=FALSE, results='hide', eval=FALSE}
+frame=
+class.table = data.frame(table(frame$class))
+colnames(class.table)[1] = c('class')
+write.csv(as.data.frame(class.table), row.names=FALSE, file='class_counts.csv')
+
+college.table = data.frame(table(frame$college))
+colnames(college.table)[1] = c('college')
+write.csv(as.data.frame(college.table), row.names=FALSE, file='college_counts.csv')
+```
+
+When we looked at this data in class, we saw that the proportions of students in each college was off, perhaps due to differential response rates, and we looked at how to fix this with poststratification. First, load the table with the college sizes:
+
+```{r}
+college.table = read.csv('college_counts.csv', stringsAsFactors=FALSE)
+print(college.table)
+```
+
+Then create a new design object like so:
+
+```{r}
+ps.des = postStratify(design = des, strata = ~college, 
+                      population = college.table)
+```
+
+Here,
+
+- `strata` is the **post**stratification variable name, given as a formula
+- `population` is the table with strata population sizes, where the first column has the corresponding labels and the second column has population counts
+
+Let's see what we got:
+
+```{r}
+summary(ps.des)
+```
+
+Now the probabilities (inverse weights) vary quite a bit, compared to the old `survey.design` object where the weights were constant:
+
+```{r}
+summary(des)
+```
+
+We can redo all the analyses above with this new object, and we'll see some changes. For example:
+
+```{r}
+svymean(~salary, design = des)
+svymean(~salary, design = ps.des)
+```
+
+Recall that in the sample we had CFA over-represented, and CIT/SCS underrepresented, so it makes sense that the poststratified estimate is larger. It's also more precise in this case, for the reasons we talked about in class.
+
+## Plots
+
+Recall the three basic strategies for making plots with weighted survey data:
+
+- Compute weighted summary statistics & plot those (histograms, barplots, ...)
+- Resample the data with probability proportional to the weights
+- In scatterplots, make point size proportional to weights
+
+The survey package implements many of these. We illustrate a few of these
+below, you can find more by browsing the help files (call `help(package=survey)` from the 
+R console).
+
+### Boxplots
+
+Let's check out boxplots using the unweighted and poststratified designs, compared to the
+a boxplot using the population data:
+
+```{r}
+par(mfrow=c(1,2))
+svyboxplot(salary~1, des, main="SRS", ylim=c(50000,190000)) 
+svyboxplot(salary~1, ps.des, main="SRS (PS)", ylim=c(50000,190000))
+```
+
+```{r, echo=FALSE, results='hide', eval=FALSE}
+# You won't be able to run this on your own machines
+# boxplot(frame$salary, ylim=c(50000,190000), prob=TRUE, main="Pop")
+```
+
+We can break these out by groups by adding variables to the right-hand
+side of the formula, e.g.:
+
+```{r}
+svyboxplot(salary~college, des, main="SRS (PS)", ylim=c(50000,190000))
+```
+
+But keep an eye on the sample sizes! 
+
+```{r}
+table(dat$college)
+```
+
+See the examples in the Barplots section below
+for how to subset a `survey.design` object to exclude some groups (e.g., because
+of small sample sizes).
+
+### Scatterplots
+
+In scatterplots, making point sizes proportional to weights can make them look more
+like the population (assuming the weights are good). Here we campare scatterplots
+of `salary` by `gpa` using unweighted, weighted and the true population data:
+
+```{r}
+par(mfrow=c(1,2))
+svyplot(salary~gpa, des, main="SRS", ylim=c(50000,190000)) 
+svyplot(salary~gpa, ps.des, main="SRS (PS)", ylim=c(50000,190000)) 
+```
+
+``````{r, echo=FALSE, results='hide', eval=FALSE}
+#plot(frame$gpa, frame$salary, main="Pop", ylim=c(50000,190000), xlab='x', ylab='y', cex = 0.8)
+```
+
+For larger datasets, other strategies (binning, transparency) are useful. See `?svyplot` for examples.
+
+### Barplots
+
+Barplots are useful for counts/proportions. As an example, let's look at `internship`:
+
+```{r}
+internship.prop = svymean(~internship, design = ps.des)
+barplot(internship.prop)
+```
+
+Those labels are ugly, but we can fix them:
+```{r}
+internship.prop = svymean(~internship, design = ps.des)
+barplot(internship.prop, names.arg = c("No Internship", "Internship"))
+```
+
+The previous two plots are just for illustration - they take up a huge amount
+of space to show a single number, the proportion of students who
+have had an internship. You shouldn't include plots like these in your reports!
+
+Barplots are more useful for variables with multiple categories, or breaking out responses
+by groups (But look out for small sample sizes  - there are 5 observations in BXA, and 6 in SCS!)
+
+```{r}
+internship.by.college = svyby(~internship, 
+                      by=~college, 
+                      FUN=svymean, 
+                      design=ps.des)
+barplot(internship.by.college, legend.text=TRUE)
+```
+
+The same plot excluding BXA and SCS can be generated by subsetting the design
+object:
+
+```{r}
+internship.by.college = svyby(~internship, 
+                      by=~college, 
+                      FUN=svymean, 
+                      design=subset(ps.des, !(college %in% c("BXA", "SCS")) ))
+barplot(internship.by.college, legend.text=TRUE)
+```
+
+The argument `!(college %in% c("BXA", "SCS"))` to `subset` excludes BXA and SCS.
+We should also fix that legend:
+
+
+```{r}
+internship.by.college = svyby(~internship, 
+                      by=~college, 
+                      FUN=svymean, 
+                      design=subset(ps.des, !(college %in% c("BXA", "SCS"))) )
+barplot(internship.by.college, 
+        legend.text=c("No Internship", "Internship"), 
+        ylim=c(0,0.8))
+```
+
+
+# Example 2: Stratified design
+
+In this example we took a stratified sample by class year, using proportional
+allocation. The format of the file is the same as it was for the SRS in 
+Example 1. 
+
+```{r}
+setwd('~/Dropbox/36-303-2018/_survey_pack_intro/example_datasets')
+dat.strat = read.csv('strat.csv', stringsAsFactors=FALSE)
+head(dat)
+```
+
+I'm going to skip creating factors here (you can  -- and should -- do that the same 
+way we did in Example 1).
+
+## Creating the `survey.design` object
+
+This is slightly more complicated than it was for the SRS. First we need to build
+a vector of stratum population sizes. First load the table of class year totals:
+
+```{r}
+class.table = read.csv('class_counts.csv', stringsAsFactors=FALSE)
+print(class.table)
+```
+
+The easiest way to create the vector of population sizes is using `merge`. This
+function joins two data frames by common column names. By merging the `class.table`
+onto `dat.strat` we create a new column with population counts:
+
+```{r}
+dat.strat.fpc = merge(dat.strat, class.table)
+head(dat.strat.fpc)
+tail(dat.strat.fpc)
+```
+
+The new column is named `Freq` (short for "frequency") as it was in `class.table`.
+Now we're ready to create the stratified `survey.design` object. This differs
+from the SRS only in that we specify the stratification variable, and use the
+population sizes we created above:
+
+```{r}
+des.strat = svydesign(ids = ~1, 
+                     probs = NULL, 
+                     strata = ~class, 
+                     fpc = ~Freq, 
+                     data = dat.strat.fpc)
+```
+
+(Note that we use a `~` in the `fpc` argument, since we created the `fpc` as a 
+new column of our data frame this time.)
+
+Let's check that everything went all right:
+
+```{r}
+summary(des.strat)
+```
+
+Note that the probabilities aren't quite equal, but this is just rounding (We used
+proportional allocation here). 
+
+
+Analyses proceed just like with an SRS, with the survey package using the correct standard errors. For example:
+```{r}
+svymean(~Q2, des=des.strat)
+```
+
+Let's see what happens if we incorrectly ignore the stratification. First make a survey design object like before, treating this as an SRS:
+
+```{r}
+des.strat.srs = svydesign(ids = ~1, 
+                     probs = NULL, 
+                     strata = NULL, 
+                     fpc = rep(5524, nrow(dat.strat)), 
+                     data = dat.strat)
+```
+
+Now let's compare the estimates:
+
+```{r}
+svymean(~Q2, design = des.strat)
+svymean(~Q2, design = des.strat.srs)
+```
+
+The point estimates are basically identical, since both designs are self-weighting (up to rounding in the proportional allocation), but the SE's are slightly smaller for the stratified sample because the response (Q2, whether the student has had an internship) and the stratification variable (class year) are related.
+
+For many estimands can compute design effects directly, without creating a second object treating the data as an SRS, for example:
+```{r}
+svymean(~Q2, design = des.strat, deff=TRUE)
+```
+
+# Example 3: Cluster design
+
+
+```{r}
+setwd('~/Dropbox/36-303-2018/_survey_pack_intro/example_datasets')
+dat.clus = read.csv('clus.csv', stringsAsFactors=FALSE)
+nclus = length(unique(dat.clus$cluster))
+Nc=360
+```
+In this example we took a one-stage cluster sample of `r nclus` clusters from `r Nc` total clusters (classrooms).
+
+```{r}
+head(dat.clus)
+```
+
+Again I'm going to skip inspecting the loaded data, creating factors and so on 
+here (you can  -- and should -- do that the same way we did in Example 1).
+
+## Creating the `survey.design` object
+The only difference here versus an SRS (Example 1) is that we specify the cluster id variable (called `cluster` here) and use the number of *clusters* in the fpc:
+```{r}
+des.clus = svydesign(ids = ~cluster, 
+                     probs = NULL, 
+                     strata = NULL, 
+                     fpc = rep(360, nrow(dat.clus)), 
+                     data = dat.clus)
+```
+
+We can check that everything went all right:
+
+```{r}
+summary(des.clus)
+```
+ 
+Analyses proceed just like with an SRS, with the survey package using the correct standard errors, etc.
+```{r}
+svymean(~Q2, des=des.clus)
+```
+
+Let's see what happens if we incorrectly ignore the clustering. First make a survey design object like before, treating this as an SRS:
+
+```{r}
+des.clus.srs = svydesign(ids = ~1, 
+                     probs = NULL, 
+                     strata = NULL, 
+                     fpc = rep(5524, nrow(dat.clus)), 
+                     data = dat.clus)
+```
+
+Now let's compare the estimates:
+
+```{r}
+svymean(~Q2, design = des.clus)
+svymean(~Q2, design = des.clus.srs)
+```
+
+The point estimates are identical, since both designs are self-weighting, but the SE's are much smaller in the SRS. 
+
+We could also have computed a design effect directly:
+```{r}
+svymean(~Q2, design = des.clus, deff=TRUE)
+```
+

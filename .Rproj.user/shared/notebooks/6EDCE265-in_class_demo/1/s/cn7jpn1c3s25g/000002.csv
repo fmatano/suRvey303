@@ -1,0 +1,7 @@
+"0","ggplot(mydata, aes(x = diast_pressure, color = race, fill = race)) +"
+"0","  geom_histogram(aes(y=..density..), position=""identity"", bins = 20, alpha=0.5) +"
+"0","  geom_density(alpha = 0.6) +"
+"0","  scale_color_brewer(palette = ""Dark2"")+"
+"0","  scale_fill_brewer(palette = ""Dark2"") + "
+"0","  ggtitle(""Diastolic pressure by race"") + "
+"0","  theme_bw()"

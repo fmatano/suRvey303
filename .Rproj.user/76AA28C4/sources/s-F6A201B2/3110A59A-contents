@@ -1,0 +1,347 @@
+---
+title: "Intro to the survey and suRvey303 package"
+author: "Robin Mejia & Francesca Matano"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+# Preliminaries
+
+The purpose of this document is to give you a brief introduction and an overview of R's survey package. 
+The survey package is available on CRAN. We also built an R package named suRvey303 which 
+combines the survey package with the data and the scripts that you will need for 
+the homework. suRvey303 is specific for this class and you are going to be able 
+to download it only when taking this class, from the ISLE platform.
+
+All the files you need to run these examples are already included in the package, 
+so you don't need to worry about where to download it from. 
+
+
+Here are a few more tips, with some overlap:
+- For data that looks numeric but isn't (e.g., id variables with leading zeros), use the `colClasses` argument
+- For data that is numeric but doesn't look it, sometimes the function `as.numeric` helps. But there's a limit to what it can fix, and sometimes you'll end up editing this data by hand in the CSV file. 
+- Inspect your data carefully. Use `head` and `tail` to look at the beginning and end of the dataset. How are missing values recorded? Most of your datasets are small enough that you'll be able to inspect the CSV file by eye, but you should look at summaries, tables and plots after you read in the data (boxplots, histograms, scatterplots,...). 
+- For categorical variables it's often a good idea to create factors after loading the data. This is especially true if you plan on fitting regression models, since R will automatically dummy-code factors. See Example 1 for how to create factors.
+
+
+## Installing the package
+
+From the R console, call `install.packages('survey')` to install the package. Then load it by calling
+
+```{r}
+devtools::load_all()
+devtools::load_data()
+library(magrittr)
+library(ggplot2)
+library(survey)
+```
+
+## Component description
+
+The dataset you are going to be using is the combination of multiple dataset available here 
+`https://wwwn.cdc.gov/nchs/nhanes/ContinuousNhanes/Default.aspx?BeginYear=2015`
+
+- dmdborn4: Due to the concerns of disclosure risk, starting in 2011, country of birth was recoded into two categories: 1 - Born in 50 U.S. states or Washington, DC; and 2- Born in other countries, including U.S. territories.
+- ridageyr: Gender of the participant, 1 - Male, 2 - Female.
+- riagendr: Recode of reported race and Hispanic origin information, with Non-Hispanic Asian Category. 
+1 - Mexican American, 2 - Other Hispanic, 3 - Non-Hispanic White, 4 - Non-Hispanic Black, 6 - Non-Hispanic Asian, 
+7 - Other Race
+- bpxpls: 60 sec. pulse, 36 to 142 is the range of values.
+- bpxsy1: Systolic: Blood pressure (first reading) mm Hg, 110 to 260 is the range of values.
+- bpxdi1: Diastolic: Blood pressure (first reading) mm Hg, 0 to 120 is the range of values.
+- bmxwt: Weights in kg
+- bmxht: Height in cm
+- whd010: Current self-reported height (inches)
+- whd020: Current self-reported weight (pounds)
+
+
+# Importing the data
+The data are already imported and saved in binary format, you only need to load the binary file. The first dataset that we will analyze here is named mydata, so go ahead and load the `mydata` file by using the function data
+
+```{r}
+data("mydata")
+```
+
+Let's start looking at what each column represents
+
+```{r}
+colnames(mydata)
+dim(mydata)
+```
+
+We left the original variables name so you can refer to the documentation. But from now on we will be using more
+intuitive labels
+
+```{r}
+names(mydata) <- c("country_birth", "age", "gender", "race"," wtint2yr", "wtmec2yr",
+                  "sdmvpsu", "sdmvstra" ,"hr_pulse", "syst_pressure", "diast_pressure",  "weight", "height", "self_reported_height","self_reported_weight")
+```
+
+Let's start by looking at the first few rows, checking the size of the reduced dataset, format of the columns, etc
+```{r}
+head(mydata)
+dim(mydata)
+str(mydata)
+summary(mydata)
+```
+Some of the variables are coded into 1,2,..., as explained in the data documentation
+
+We will re-label some of these to make the dataset easier to read. Note that we only worry about the 
+factors variables.
+```{r}
+mydata$country_birth <- factor(mydata$country_birth, levels = c(1, 2), labels = c("us50-dc", "other"))
+mydata$gender <- factor(mydata$gender, levels = c(1, 2), labels = c("male", "female"))
+mydata$race <- factor(mydata$race, levels = c(1:4, 6, 7), labels = c("mexican-american", "other-hispanic", 
+                                                               "non-hispanic_white", "non-hispanic_black", 
+                                                               "non-hipsanic_asian", "other_race"))
+```
+
+Moreover the self-reported weight and height are in different scale with respect to the measured weight and height. 
+We will convert the weight from kg to pounds and height from cm to inches.
+
+```{r}
+mydata$weight <- mydata$weight*2.20
+mydata$height <- mydata$height*0.39
+```
+ 
+Let's take a look at the data now
+```{r}
+head(mydata)
+```
+
+# Getting familiar with the dataset
+Before going through the survey.design object we will get familiar with the data. In order to do this we will visualize the distribution of the variables and the conditional distributions.
+
+```{r, warning=FALSE}
+ggplot(mydata, aes(x = height, color = gender, fill = gender)) +
+  geom_histogram(aes(y=..density..), position="identity", bins = 20, alpha=0.5) +
+  scale_color_brewer(palette = "Dark2")+
+  scale_fill_brewer(palette = "Dark2") + 
+  geom_density(alpha = 0.6) +
+  theme_bw()
+```
+
+## Interesting facts
+It turns out there exist some interesting relationship between gender and misreported measures. 
+Let's take a look at them.
+
+We can compare the distribution of weight and self-reported weight by age, but we first need 
+to re-format the data in a long format
+
+```{r, warning=FALSE}
+new_data_f <- subset(mydata, gender == "female")[,c("weight", "self_reported_weight")] %>% 
+  reshape2::melt(measure.vars = c("weight", "self_reported_weight"), variable.name = "rec_type", 
+                 value.name = "measurement")
+levels(new_data_f$rec_type) <- c("measured", "self-reported")
+
+new_data_m  <- subset(mydata, gender == "male")[,c("weight", "self_reported_weight")] %>%
+  reshape2::melt(measure.vars = c("weight", "self_reported_weight"), variable.name = "rec_type", 
+                 value.name = "measurement")
+levels(new_data_m$rec_type) <- c("measured", "self-reported")
+
+# exclude missing values coded with high numbers
+new_data_f$measurement[new_data_f$measurement > 7000] <- NA
+new_data_m$measurement[new_data_m$measurement > 7000] <- NA
+
+```
+
+
+```{r, warning=FALSE}
+ggplot(new_data_f, aes(x = measurement, color = rec_type, fill = rec_type)) +
+  geom_histogram(aes(y=..density..), position="identity", bins = 20, alpha = 0.5) +
+  scale_color_brewer(palette = "Dark2")+
+  scale_fill_brewer(palette = "Dark2") + 
+  geom_density(alpha = 0.6) +
+  ggtitle("Measured weight vs self-reported weight for female") + 
+  theme_bw()
+```
+
+```{r, warning=FALSE}
+ggplot(new_data_m, aes(x = measurement, color = rec_type, fill = rec_type)) +
+  geom_histogram(aes(y=..density..), position="identity", bins = 20, alpha=0.5) +
+  scale_color_brewer(palette = "Dark2")+
+  scale_fill_brewer(palette = "Dark2") + 
+  geom_density(alpha = 0.6) +
+  ggtitle("Measured weight vs self-reported weight for male") + 
+  theme_bw()
+```
+
+We can do the same for height and self-reported height. We first re-format the data
+
+```{r}
+new_data_f <- subset(mydata, gender == "female")[,c("height", "self_reported_height")] %>% 
+  reshape2::melt(measure.vars = c("height", "self_reported_height"), variable.name = "rec_type", 
+                 value.name = "measurement")
+levels(new_data_f$rec_type) <- c("measured", "self-reported")
+
+new_data_m  <- subset(mydata, gender == "male")[,c("height", "self_reported_height")] %>%
+  reshape2::melt(measure.vars = c("height", "self_reported_height"), variable.name = "rec_type", 
+                 value.name = "measurement")
+levels(new_data_m$rec_type) <- c("measured", "self-reported")
+
+# exclude missing values coded with high numbers
+new_data_f$measurement[new_data_f$measurement > 7000] <- NA
+new_data_m$measurement[new_data_m$measurement > 7000] <- NA
+```
+
+We then exclude missing values and plot the results
+```{r, warning = FALSE}
+ggplot(new_data_f, aes(x = measurement, color = rec_type, fill = rec_type)) +
+  geom_histogram(aes(y=..density..), position="identity", bins = 20, alpha = 0.5) +
+  scale_color_brewer(palette = "Dark2")+
+  scale_fill_brewer(palette = "Dark2") + 
+  geom_density(alpha = 0.6) +
+  ggtitle("Measured height vs self-reported height for female") + 
+  theme_bw()
+```
+
+```{r, warning = FALSE}
+ggplot(new_data_m, aes(x = measurement, color = rec_type, fill = rec_type)) +
+  geom_histogram(aes(y=..density..), position="identity", bins = 20, alpha=0.5) +
+  scale_color_brewer(palette = "Dark2")+
+  scale_fill_brewer(palette = "Dark2") + 
+  geom_density(alpha = 0.6) +
+  xlab("height (inches)") + 
+  ggtitle("Measured heigth vs self-reported height for male") + 
+  theme_bw()
+
+```
+
+
+We can also look at blood pressure by race 
+```{r, warning = FALSE}
+ggplot(mydata, aes(x = syst_pressure, color = race, fill = race)) +
+  geom_histogram(aes(y=..density..), position="identity", bins = 20, alpha=0.4) +
+  geom_density(alpha = 0.6) +
+  ggtitle("Systolic pressure by race") + 
+  theme_bw()
+```
+
+```{r, warning = FALSE}
+ggplot(mydata, aes(x = diast_pressure, color = race, fill = race)) +
+  geom_histogram(aes(y=..density..), position="identity", bins = 20, alpha=0.4) +
+  geom_density(alpha = 0.6) +
+  ggtitle("Diastolic pressure by race") + 
+  theme_bw()
+```
+
+### Creating the `survey.design` object
+
+The survey package provides a `survey.design` object, which is a container for a dataset and the sampling design information, including sampling scheme, weights, population sizes (and more). 
+
+The `svydesign` function is used to create `survey.design` objects. It has a number of arguments, but the most important for you are:
+
+- `ids`: Name of variable in the dataframe that contains cluster ids
+- `strata`: Names of stratification variables, as a formula: `~var1 + var2 + var3`
+- `fpc`: A vector the same length as the data, giving the stratum population size for each *observation*. The name is confusing, since you don't actually supply the finite population correction factor.
+- `data`: Dataframe containing the raw survey data
+
+For this example we will use our data from the NHANES 2015-2016. From the Data collection procedure, `https://wwwn.cdc.gov/nchs/nhanes/ContinuousNhanes/Overview.aspx?BeginYear=2015` you can see that 
+in 2015-2016, 15,327 persons were selected for NHANES from 30 different survey locations. Of those selected, 9,971 completed the interview and 9,544 were examined.
+In this case there were $N$ is the population of the US, $N=327600000$
+
+
+
+```{r}
+N = 327600000
+n = nrow(mydata)
+des = svydesign(ids = ~sdmvpsu, 
+                # strata = ~sdmvstra, 
+                fpc = rep(N, n),
+                weights = ~wtmec2yr,
+                data = mydata
+                )
+```
+"Independent sampling design" means that the sampling design is an SRS. When the population size is specified (via the `fpc` argument) it is assumed that the SRS is without replacement.
+
+The arguments are interpreted as the following:
+
+- `ids = ~1` means there is no clustering.
+- `strata = NULL` means there was no stratification.
+- `fpc = rep(N, n)`: The function call `rep(N, n)` generates a vector of length `n` where each entry is `N` (the population size).
+- `data = mydata` tells `svydesign` where to find the actual data. 
+    
+Let's see what the results look like:
+
+```{r}
+summary(des)
+```
+
+
+### Estimates with the survey package
+
+Once we've created the `survey.design` object `des` we can start computing things! the survey package provides a number of `svy*` functions that are similar to built in R functions, but account for survey design features. 
+
+To calculate a mean, with the correct SE (including the fpc):
+```{r}
+svymean(~age, design = des)
+```
+
+Like most of the functions in the survey package, `svymean` relies on R formulas to select variables. These are similar to the formulas you're familiar with from `lm` for example, but are often one-sided (as above). This looks awkward but can actually be convenient, since you can do things like transform variables on the fly:
+
+```{r}
+svymean(~log10(age), design = des)
+```
+
+Totals and proportions are computed similarly:
+```{r}
+svytotal(~gender, des)
+svymean(~gender, des)
+```
+
+To calculate subgroup statistics with the correct SE's, you can use `svyby`:
+
+```{r}
+svyby(~age, by=~gender, design=des, FUN = svymean)
+```
+
+These standard errors are corrected to account for the random denominators (subgroup sizes). If you're only interested in particular subgroups, you can use the `subset` function too:
+
+```{r}
+svymean(~age,  design=subset(des, race == "other-hispanic"))
+```
+
+You can compute confidence intervals by hand, using the formulas based on the CLT, or using the `confint` function:
+```{r}
+confint(svymean(~age, des))
+```
+
+#### Linear Regression
+
+For fitting regression models, use `svyglm`. The interface is very similar to the core `lm` or `glm` functions:
+
+```{r}
+linear.reg = svyglm(diast_pressure ~ gender + age + race + height + weight, design = des)
+summary(linear.reg)
+```
+
+Standard diagnostics are available to you as well, for example:
+
+```{r}
+plot(linear.reg)
+```
+
+
+#### Logistic Regression
+
+For logistic regression we have to transform the response into a numeric variable taking values 0 or 1, and specify `family=quasibinomial()` (this is essentially the same as using `family=binomial` in `glm` but avoids pesky warnings):
+
+```{r}
+# Create the 2-level variable
+dias_pressure_logistic <- rep(0, nrow(mydata))
+dias_pressure_logistic[mydata$diast_pressure > 75] <- 1
+mydata$dias_pressure_logistic <- dias_pressure_logistic 
+
+# re-estimate the design object
+des = svydesign(ids = ~1, 
+                    strata = NULL, 
+                    fpc = rep(N, n),
+                    data = mydata
+                    )
+
+logistic.reg = svyglm(dias_pressure_logistic ~ gender + age + race + height + weight, design = des, family=quasibinomial())
+summary(logistic.reg)
+```
+
+
